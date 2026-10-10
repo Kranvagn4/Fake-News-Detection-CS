@@ -1,0 +1,279 @@
+import argparse
+import os
+import re
+import warnings
+import joblib
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score,
+    confusion_matrix, classification_report, roc_curve, roc_auc_score
+)
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import LinearSVC
+from xgboost import XGBClassifier
+from wordcloud import WordCloud
+from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
+
+# Setup global configurations
+warnings.filterwarnings('ignore')
+RANDOM_STATE = 42
+sns.set_theme(style='whitegrid')
+
+
+def clean_text(text: str) -> str:
+    """Preprocesses input text by removing HTML tags, URLs, non-alphabetic chars, and extra whitespace."""
+    text = re.sub(r'<[^>]+>', ' ', str(text))
+    text = re.sub(r'https?://\S+|www\.\S+', ' ', text)
+    text = re.sub(r'[^a-zA-Z\s]', ' ', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.lower().strip()
+
+
+def plot_system_workflow():
+    """Figure 1 — System workflow diagram."""
+    steps = [
+        'News CSVs', 'Data checks', 'Text cleaning', 'TF-IDF',
+        'Train models', 'Evaluate', 'Save model', 'User prediction'
+    ]
+    fig, ax = plt.subplots(figsize=(15, 3.2))
+    ax.set_xlim(0, len(steps) * 1.65)
+    ax.set_ylim(0, 2)
+    ax.axis('off')
+
+    for i, label in enumerate(steps):
+        x = i * 1.65 + 0.1
+        ax.add_patch(FancyBboxPatch((x, 0.65), 1.3, 0.7, boxstyle='round,pad=0.06', facecolor='white', edgecolor='black'))
+        ax.text(x + 0.65, 1, label, ha='center', va='center', fontsize=9, wrap=True)
+        if i < len(steps) - 1:
+            ax.add_patch(FancyArrowPatch((x + 1.32, 1), (x + 1.58, 1), arrowstyle='->', mutation_scale=12))
+
+    ax.set_title('Figure 1. Proposed Fake-News Detection System Workflow')
+    plt.tight_layout()
+    plt.show()
+
+
+def main(fake_csv_path: str, true_csv_path: str, model_output_path: str):
+    # -------------------------------------------------------------
+    # 1. Load Data
+    # -------------------------------------------------------------
+    if not os.path.exists(fake_csv_path) or not os.path.exists(true_csv_path):
+        raise FileNotFoundError(f"Ensure both '{fake_csv_path}' and '{true_csv_path}' exist.")
+
+    print(f"Loading data from {fake_csv_path} and {true_csv_path}...")
+    fake = pd.read_csv(fake_csv_path)
+    real = pd.read_csv(true_csv_path)
+
+    fake['label'] = 'Fake'
+    real['label'] = 'Real'
+
+    df = pd.concat([fake, real], ignore_index=True)
+
+    if 'text' not in df.columns:
+        raise ValueError("Both CSVs must include a 'text' column.")
+
+    df['title'] = df['title'].fillna('').astype(str) if 'title' in df else ''
+    df['text'] = df['text'].fillna('').astype(str)
+    df['combined_text'] = (df['title'].str.strip() + ' ' + df['text'].str.strip()).str.strip()
+
+    print('Raw rows:', len(df))
+    print('Columns:', df.columns.tolist())
+
+    # -------------------------------------------------------------
+    # 2. Data Quality Profile & Cleaning
+    # -------------------------------------------------------------
+    profile = pd.DataFrame({
+        'Metric': ['Rows before cleaning', 'Fake rows', 'Real rows', 'Missing text', 'Exact duplicate rows'],
+        'Value': [
+            len(df),
+            int((df.label == 'Fake').sum()),
+            int((df.label == 'Real').sum()),
+            int(df.text.isna().sum()),
+            int(df.duplicated().sum())
+        ]
+    })
+    print("\nDataset Quality Profile:\n", profile.to_string(index=False))
+
+    before = len(df)
+    df = df[df.combined_text.str.len() > 0].copy()
+    df = df.drop_duplicates(subset=['combined_text', 'label']).reset_index(drop=True)
+    print('Rows removed by empty-text/deduplication:', before - len(df))
+    print('Rows after cleaning:', len(df))
+    print(df.label.value_counts().rename_axis('Class').to_frame('Count'))
+
+    # -------------------------------------------------------------
+    # 3. Figures & Exploratory Analysis
+    # -------------------------------------------------------------
+    # Figure 1: Workflow
+    plot_system_workflow()
+
+    # Figure 2: Class distribution
+    counts = df.label.value_counts().reindex(['Fake', 'Real'], fill_value=0)
+    fig, ax = plt.subplots(figsize=(6, 4))
+    bars = ax.bar(counts.index, counts.values)
+    ax.set_title('Figure 2. Distribution of Fake and Real News Records')
+    ax.set_xlabel('Class')
+    ax.set_ylabel('Records')
+    ax.bar_label(bars)
+    plt.tight_layout()
+    plt.show()
+
+    # Text Preprocessing
+    print("\nPreprocessing text...")
+    df['clean_text'] = df.combined_text.apply(clean_text)
+    df = df[df.clean_text.str.len() > 0].copy()
+
+    # Exploratory Word Clouds
+    for label in ['Fake', 'Real']:
+        blob = ' '.join(df.loc[df.label == label, 'clean_text'].astype(str))
+        if blob.strip():
+            wc = WordCloud(width=1000, height=450, background_color='white', max_words=100, collocations=False).generate(blob)
+            plt.figure(figsize=(12, 5))
+            plt.imshow(wc, interpolation='bilinear')
+            plt.axis('off')
+            plt.title(f'Exploratory Word Cloud — {label} News')
+            plt.show()
+
+    # -------------------------------------------------------------
+    # 4. Train/Test Split & TF-IDF
+    # -------------------------------------------------------------
+    X = df.clean_text
+    y = df.label.map({'Fake': 1, 'Real': 0})
+
+    X_train_text, X_test_text, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y
+    )
+
+    vectorizer = TfidfVectorizer(max_features=10000, ngram_range=(1, 2), min_df=2, sublinear_tf=True)
+    X_train_tfidf = vectorizer.fit_transform(X_train_text)
+    X_test_tfidf = vectorizer.transform(X_test_text)
+
+    print('\nTrain shape:', X_train_tfidf.shape, 'Test shape:', X_test_tfidf.shape, 'Vocabulary:', len(vectorizer.vocabulary_))
+
+    # -------------------------------------------------------------
+    # 5. Train Models
+    # -------------------------------------------------------------
+    models = {
+        'Logistic Regression': LogisticRegression(max_iter=1000, random_state=RANDOM_STATE),
+        'Linear SVM': LinearSVC(random_state=RANDOM_STATE),
+        'XGBoost': XGBClassifier(
+            n_estimators=250, max_depth=6, learning_rate=0.1, subsample=0.8,
+            colsample_bytree=0.8, objective='binary:logistic', eval_metric='logloss',
+            random_state=RANDOM_STATE, n_jobs=-1
+        )
+    }
+
+    trained, preds, score_outputs, rows = {}, {}, {}, []
+
+    print("\nTraining models...")
+    for name, model in models.items():
+        print('Training:', name)
+        model.fit(X_train_tfidf, y_train)
+        pred = np.asarray(model.predict(X_test_tfidf)).astype(int)
+        trained[name] = model
+        preds[name] = pred
+
+        rows.append({
+            'Model': name,
+            'Accuracy': accuracy_score(y_test, pred),
+            'Precision': precision_score(y_test, pred, zero_division=0),
+            'Recall': recall_score(y_test, pred, zero_division=0),
+            'F1-score': f1_score(y_test, pred, zero_division=0)
+        })
+
+        if hasattr(model, 'predict_proba'):
+            score_outputs[name] = model.predict_proba(X_test_tfidf)[:, 1]
+        elif hasattr(model, 'decision_function'):
+            score_outputs[name] = model.decision_function(X_test_tfidf)
+
+    results = pd.DataFrame(rows).sort_values('F1-score', ascending=False).reset_index(drop=True)
+    print("\nModel Results:\n", results.to_string(index=False))
+
+    # -------------------------------------------------------------
+    # 6. Evaluation Visualizations
+    # -------------------------------------------------------------
+    # Figure 3: Performance Comparison
+    ax = results.set_index('Model')[['Accuracy', 'Precision', 'Recall', 'F1-score']].plot(kind='bar', figsize=(11, 5), ylim=(0, 1))
+    ax.set_title('Figure 3. Performance Comparison of Classical ML Models')
+    ax.set_xlabel('Model')
+    ax.set_ylabel('Score')
+    plt.xticks(rotation=15, ha='right')
+    plt.tight_layout()
+    plt.show()
+
+    # Figure 4: Confusion Matrix
+    best_name = results.iloc[0]['Model']
+    best_model = trained[best_name]
+    best_pred = preds[best_name]
+
+    cm = confusion_matrix(y_test, best_pred, labels=[1, 0])
+    cm_df = pd.DataFrame(cm, index=['Actual Fake', 'Actual Real'], columns=['Predicted Fake', 'Predicted Real'])
+    plt.figure(figsize=(6, 5))
+    sns.heatmap(cm_df, annot=True, fmt='d', cmap='Blues', cbar=False)
+    plt.title(f'Figure 4. Confusion Matrix — {best_name}')
+    plt.tight_layout()
+    plt.show()
+
+    tn, fp, fn, tp = confusion_matrix(y_test, best_pred, labels=[0, 1]).ravel()
+    print('\nSelected by F1:', best_name)
+    print(f'TP={tp} (Fake→Fake), TN={tn} (Real→Real), FP={fp} (Real→Fake), FN={fn} (Fake→Real)')
+    print("\nClassification Report:\n", classification_report(y_test, best_pred, target_names=['Real', 'Fake'], zero_division=0))
+
+    # Figure 5: ROC Curves
+    plt.figure(figsize=(7, 5))
+    auc_rows = []
+    for name, scores in score_outputs.items():
+        fpr, tpr, _ = roc_curve(y_test, scores)
+        auc = roc_auc_score(y_test, scores)
+        plt.plot(fpr, tpr, label=f'{name} (AUC={auc:.3f})')
+        auc_rows.append({'Model': name, 'ROC-AUC': auc})
+
+    plt.plot([0, 1], [0, 1], '--', label='Chance')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Figure 5. ROC Curves')
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+    # -------------------------------------------------------------
+    # 7. Save Model Artifacts
+    # -------------------------------------------------------------
+    artifact = {
+        'model': best_model,
+        'vectorizer': vectorizer,
+        'label_mapping': {0: 'Real', 1: 'Fake'},
+        'model_name': best_name
+    }
+    joblib.dump(artifact, model_output_path)
+    print(f"\nModel artifact saved successfully to '{model_output_path}'")
+
+    # -------------------------------------------------------------
+    # 8. Interactive Text Classifier
+    # -------------------------------------------------------------
+    print("\n--- Live Classification Test ---")
+    custom = input('Paste a news headline/article to classify (or press Enter to skip): ').strip()
+    if custom:
+        v = vectorizer.transform([clean_text(custom)])
+        pred = int(best_model.predict(v)[0])
+        print('Predicted label:', 'Fake' if pred == 1 else 'Real')
+        if hasattr(best_model, 'predict_proba'):
+            print('Model probability for Fake:', round(float(best_model.predict_proba(v)[0][1]), 4))
+        else:
+            print('This model does not provide calibrated probabilities; no confidence probability is displayed.')
+        print('Note: this is a text-pattern classification, not independent fact verification.')
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Fake News Detection Training Script")
+    parser.add_argument('--fake', type=str, default='fake.csv', help='Path to fake news CSV file')
+    parser.add_argument('--true', type=str, default='true.csv', help='Path to real news CSV file')
+    parser.add_argument('--output', type=str, default='fake_news_detector.joblib', help='Path to save output model')
+    args = parser.parse_args()
+
+    main(args.fake, args.true, args.output)
