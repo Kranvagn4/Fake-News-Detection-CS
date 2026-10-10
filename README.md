@@ -10,7 +10,7 @@ A Python-based machine learning project that classifies news articles as **Fake*
 Group Members:
 Sanyukt Ramola - 23070122194,
 Dushyant Singh Chouhan - 23070122089,
-Abhudaya Dixit - 23070122268,
+Abhudaya Dixit - 23070122268.
 
 ## Features
 
