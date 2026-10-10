@@ -2,7 +2,7 @@
 
 A Python-based machine learning project that classifies news articles as **Fake** or **Real** using text preprocessing, TF-IDF feature extraction, and multiple classifiers.
 
-**GitHub profile:** https://github.com/dushyant1704  
+**GitHub profile:**  https://github.com/Kranvagn4/
 **Repository URL:** Add the URL of this project repository after creating it on GitHub.
 
 > **Disclaimer:** This project identifies text patterns learned from a dataset. Its predictions are not independent fact-checking and should not be treated as proof that a news story is true or false.
