@@ -7,8 +7,8 @@ A Python-based machine learning project that classifies news articles as **Fake*
 
 > **Disclaimer:** This project identifies text patterns learned from a dataset. Its predictions are not independent fact-checking and should not be treated as proof that a news story is true or false.
 Group Members:
-> Sanyukt Ramola - 23070122194
-> Dushyant Singh Chouhan - 23070122089
+Sanyukt Ramola - 23070122194
+Dushyant Singh Chouhan - 23070122089
 > Abhudaya Dixit - 23070122268
 ## Features
 
